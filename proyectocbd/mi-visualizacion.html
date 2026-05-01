@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Visualización Censo Conductores - alucloud86</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f4f4; text-align: center; }
+        .bar { fill: #4682b4; }
+        .bar:hover { fill: #5f9ea0; }
+        .axis-label { font-size: 12px; }
+        .chart-container { background: white; margin: 20px auto; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 80%; }
+    </style>
+</head>
+<body>
+    <h1>Resultados del Procesamiento Hadoop</h1>
+    <p>Visualización dinámica de los datos procesados por los Mappers</p>
+    
+    <div class="chart-container">
+        <svg id="canvas" width="800" height="400"></svg>
+    </div>
+
+    <script>
+        // Ruta al archivo que sube Ansible
+        const dataPath = "data/datos.json";
+
+        d3.json(dataPath).then(data => {
+            // Esperamos un formato JSON: [{"key": "Valor", "value": 123}, ...]
+            const margin = {top: 20, right: 30, bottom: 40, left: 60};
+            const width = 800 - margin.left - margin.right;
+            const height = 400 - margin.top - margin.bottom;
+
+            const svg = d3.select("#canvas")
+                .attr("width", width + margin.left + margin.right)
+                .attr("height", height + margin.top + margin.bottom)
+                .append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            // Escalas
+            const x = d3.scaleBand()
+                .domain(data.map(d => d.key))
+                .range([0, width])
+                .padding(0.1);
+
+            const y = d3.scaleLinear()
+                .domain([0, d3.max(data, d => d.value)])
+                .nice()
+                .range([height, 0]);
+
+            // Ejes
+            svg.append("g")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x));
+
+            svg.append("g")
+                .call(d3.axisLeft(y));
+
+            // Barras
+            svg.selectAll(".bar")
+                .data(data)
+                .enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", d => x(d.key))
+                .attr("y", d => y(d.value))
+                .attr("width", x.bandwidth())
+                .attr("height", d => height - y(d.value));
+
+        }).catch(error => {
+            console.error("Error cargando el JSON:", error);
+            d3.select("body").append("p").text("Error: No se pudo cargar data/datos.json. Asegúrate de procesar los datos primero.").style("color", "red");
+        });
+    </script>
+</body>
+</html>

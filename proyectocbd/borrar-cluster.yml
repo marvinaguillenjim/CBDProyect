@@ -1,0 +1,24 @@
+---
+- name: Eliminar instancias del cluster
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Buscar todas las instancias de alucloud86
+      ec2_instance_info:
+        region: us-east-1
+        filters:
+          "tag:owner": "alucloud86"
+          instance-state-name: [ "running", "pending", "stopped" ]
+      register: ec2_info
+
+    - name: Terminar las instancias encontradas
+      ec2:
+        state: absent
+        region: us-east-1
+        instance_ids: "{{ ec2_info.instances | map(attribute='instance_id') | list }}"
+        wait: yes
+      when: ec2_info.instances | length > 0
+
+    - name: Resultado
+      debug:
+        msg: "Se han enviado órdenes de borrado para {{ ec2_info.instances | length }} instancias."
