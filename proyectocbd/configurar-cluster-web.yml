@@ -1,6 +1,6 @@
 ---
 # Proyecto: Despliegue de Clúster Hadoop, Servidor Web y Visualización D3.js
-# Configuración: Hadoop 3.3.1 + Apache2 + Python Streaming
+# Configuración: Hadoop 3.3.1 + Apache2 + Python Streaming (Corregido)
 
 #####################
 # 1. PROVISIÓN DE VMs
@@ -53,8 +53,10 @@
     - name: Wait for cloud-init to finish
       wait_for: 
         path: /var/log/cloud-init.log
-        timeout: 15
+        timeout: 300
         search_regex: "final-message"
+      register: cloud_init_check
+      ignore_errors: yes
 
     - name: Instalar Dependencias (Java y Apache)
       apt:
@@ -86,6 +88,27 @@
         owner: ubuntu
         group: ubuntu
 
+    # --- CONFIGURACIÓN DE ARCHIVOS HADOOP (NUEVO) ---
+    - name: Configurar core-site.xml
+      blockinfile:
+        path: "{{ hadoop_home }}/etc/hadoop/core-site.xml"
+        insertafter: "<configuration>"
+        block: |
+          <property>
+              <name>fs.defaultFS</name>
+              <value>hdfs://localhost:9000</value>
+          </property>
+
+    - name: Configurar hdfs-site.xml
+      blockinfile:
+        path: "{{ hadoop_home }}/etc/hadoop/hdfs-site.xml"
+        insertafter: "<configuration>"
+        block: |
+          <property>
+              <name>dfs.replication</name>
+              <value>1</value>
+          </property>
+
     - name: Configurar Variables de Entorno en .bashrc
       blockinfile:
         path: /home/ubuntu/.bashrc
@@ -93,6 +116,12 @@
           export JAVA_HOME={{ java_home }}
           export HADOOP_HOME={{ hadoop_home }}
           export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+          # Usuarios necesarios para Hadoop 3
+          export HDFS_NAMENODE_USER=ubuntu
+          export HDFS_DATANODE_USER=ubuntu
+          export HDFS_SECONDARYNAMENODE_USER=ubuntu
+          export YARN_RESOURCEMANAGER_USER=ubuntu
+          export YARN_NODEMANAGER_USER=ubuntu
 
     # --- PREPARACIÓN DE ARCHIVOS DEL PROYECTO ---
     - name: Crear estructura de directorios local
@@ -126,18 +155,26 @@
     # --- FLUJO DE TRABAJO HADOOP (Solo en Maestro) ---
     - name: Procesamiento MapReduce en HDFS
       block:
-        - name: Formatear HDFS e iniciar servicios (Modo Pseudo-distribuido básico)
+        - name: Formatear HDFS e iniciar servicios
           shell: |
             export JAVA_HOME={{ java_home }}
+            export HDFS_NAMENODE_USER=ubuntu
+            export HDFS_DATANODE_USER=ubuntu
+            export HDFS_SECONDARYNAMENODE_USER=ubuntu
+            export YARN_RESOURCEMANAGER_USER=ubuntu
+            export YARN_NODEMANAGER_USER=ubuntu
+            
+            # Formatear solo si no está formateado e iniciar
             {{ hadoop_home }}/bin/hdfs namenode -format -force
             {{ hadoop_home }}/sbin/start-dfs.sh
             {{ hadoop_home }}/sbin/start-yarn.sh
-          ignore_errors: yes
+          become_user: ubuntu
 
         - name: Crear carpetas y subir datos a HDFS
           shell: |
             {{ hadoop_home }}/bin/hdfs dfs -mkdir -p /input/conductores
             {{ hadoop_home }}/bin/hdfs dfs -put -f /opt/censo/conductores.csv /input/conductores/
+          become_user: ubuntu
 
         - name: Ejecutar Hadoop Streaming
           shell: |
@@ -148,11 +185,18 @@
             -reducer "python3 /opt/censo/reducer.py" \
             -input /input/conductores/conductores.csv \
             -output /output/censo_{{ ansible_date_time.epoch }}
+          become_user: ubuntu
 
         - name: Exportar JSON final para la Web
           shell: |
             {{ hadoop_home }}/bin/hdfs dfs -getmerge /output/censo_{{ ansible_date_time.epoch }} /var/www/html/data/datos.json
-            chown www-data:www-data /var/www/html/data/datos.json
-            chmod 644 /var/www/html/data/datos.json
+          become_user: ubuntu
+
+        - name: Ajustar permisos del JSON para Apache
+          file:
+            path: /var/www/html/data/datos.json
+            owner: www-data
+            group: www-data
+            mode: '0644'
 
       when: inventory_hostname == groups['ec2hosts'][0]
