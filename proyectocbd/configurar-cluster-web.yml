@@ -1,36 +1,32 @@
 ---
-# Proyecto: Configuración de Clúster Web y Procesamiento MapReduce
-# Basado en la plantilla de German Molto - Adaptado para Procesamiento de Censo
+# Proyecto: Despliegue de Clúster Hadoop, Servidor Web y Visualización D3.js
+# Configuración: Hadoop 3.3.1 + Apache2 + Python Streaming
 
 #####################
-#
-#  PROVISIÓN DE VMs
-#
+# 1. PROVISIÓN DE VMs
 #####################
 - name: Provision VMs
-  hosts: all
+  hosts: localhost
   connection: local
-  tags:
-    - provision
-
+  tags: [provision]
   vars:
     instance_type: t2.micro
-    image: ami-7dce6507 # Ubuntu 14.04 HVM (Asegúrate de que esta AMI sea válida en tu lab)
+    image: ami-0c7217cdde317cfec # Ubuntu 22.04 LTS en us-east-1
     subnet_id: subnet-2bfb6c4f 
-
   tasks:
     - name: Provisioning EC2 instance(s)
       local_action: ec2
            keypair="alucloud{{ id }}-keypair"
            group="gs-aws-{{ id }}"
-           instance_type={{ instance_type }}
-           image={{ image }}
+           instance_type="{{ instance_type }}"
+           image="{{ image }}"
            wait=true
-           count=3
-           vpc_subnet_id={{ subnet_id }}
+           count=4
+           vpc_subnet_id="{{ subnet_id }}"
            region="us-east-1"
            instance_tags='{"ansible":"alucloud{{ id }}"}'
       register: ec2vms
+      run_once: true
 
     - name: Add new instance to host group
       local_action: add_host hostname={{ item.public_ip }} groupname=ec2hosts
@@ -38,19 +34,20 @@
 
     - name: Waiting for the new instance(s) to be ready
       local_action: wait_for
-         host={{ item.public_dns_name }} port=22 delay=30 timeout=450 state=started
+           host={{ item.public_dns_name }} port=22 delay=30 timeout=450 state=started
       with_items: "{{ ec2vms.instances }}"
 
-#####################
-#
-#  CONFIGURACIÓN DE VMs Y MAPREDUCE
-#
-#####################
+######################################
+# 2. INSTALACIÓN Y CONFIGURACIÓN CLÚSTER
+######################################
 - name: Configure VM(s)
   hosts: ec2hosts
   become: yes
-  tags:
-    - configuration
+  tags: [configuration]
+  vars:
+    hadoop_ver: "3.3.1"
+    hadoop_home: "/usr/local/hadoop"
+    java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 
   tasks:
     - name: Wait for cloud-init to finish
@@ -59,58 +56,103 @@
         timeout: 15
         search_regex: "final-message"
 
-    - name: Instalar Apache Web Server
-      apt: name=apache2 update_cache=yes state=present
+    - name: Instalar Dependencias (Java y Apache)
+      apt:
+        name: "{{ item }}"
+        update_cache: yes
+        state: present
+      with_items:
+        - openjdk-11-jdk
+        - apache2
 
-    - name: Crear estructura de directorios
+    # --- INSTALACIÓN DE HADOOP ---
+    - name: Descargar Hadoop {{ hadoop_ver }}
+      get_url:
+        url: "https://archive.apache.org/dist/hadoop/common/hadoop-{{ hadoop_ver }}/hadoop-{{ hadoop_ver }}.tar.gz"
+        dest: /tmp/hadoop.tar.gz
+
+    - name: Extraer Hadoop
+      unarchive:
+        src: /tmp/hadoop.tar.gz
+        dest: /usr/local
+        remote_src: yes
+        creates: "/usr/local/hadoop-{{ hadoop_ver }}"
+
+    - name: Configurar enlace simbólico y permisos
+      file:
+        src: "/usr/local/hadoop-{{ hadoop_ver }}"
+        dest: "{{ hadoop_home }}"
+        state: link
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Configurar Variables de Entorno en .bashrc
+      blockinfile:
+        path: /home/ubuntu/.bashrc
+        block: |
+          export JAVA_HOME={{ java_home }}
+          export HADOOP_HOME={{ hadoop_home }}
+          export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+
+    # --- PREPARACIÓN DE ARCHIVOS DEL PROYECTO ---
+    - name: Crear estructura de directorios local
       file:
         path: "{{ item }}"
         state: directory
         mode: '0755'
-        owner: www-data
-        group: www-data
+        owner: ubuntu
       with_items:
         - /opt/censo
         - /var/www/html/data
 
-    - name: Desplegar archivo HTML con D3.js
+    - name: Desplegar Dashboard D3.js (index.html)
       copy:
         src: ./mi-visualizacion.html
         dest: /var/www/html/index.html
         owner: www-data
-        group: www-data
         mode: '0644'
+      when: inventory_hostname == groups['ec2hosts'][0]
 
-    - name: Copiar dataset de conductores a los nodos
+    - name: Copiar Dataset y Mappers
       copy:
-        src: ./2026_1_Nconductores_censo_conductores_clases_antiguedad202601.txt
-        dest: /home/ubuntu/conductores.txt
-        owner: ubuntu
-        mode: '0644'
-
-    - name: Copiar Mappers al Clúster
-      copy:
-        src: "./files/{{ item }}"
-        dest: "/opt/censo/{{ item }}"
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
         mode: '0755'
       with_items:
-        - mapper_provincia.py
-        - mapper_sexo_permiso.py
-        - mapper_antiguedad.py
+        - { src: './2026_1_Nconductores_censo_conductores_clases_antiguedad202601.txt', dest: '/opt/censo/conductores.csv' }
+        - { src: './files/mapper_provincia.py', dest: '/opt/censo/mapper_provincia.py' }
+        - { src: './files/reducer.py', dest: '/opt/censo/reducer.py' }
 
-    - name: Ejecutar procesamiento MapReduce y generar JSON para D3.js
-      shell: |
-        cat /home/ubuntu/conductores.txt | \
-        python3 /opt/censo/mapper_provincia.py | \
-        sort | uniq -c | grep -v "COD_PROVINCIA" | \
-        awk '{printf "{\"key\": \"%s\", \"value\": %d},", $2, $1}' | \
-        sed 's/,$//' | sed 's/^/[ /;s/$/ ]/' > /var/www/html/data/datos.json
-      args:
-        executable: /bin/bash
+    # --- FLUJO DE TRABAJO HADOOP (Solo en Maestro) ---
+    - name: Procesamiento MapReduce en HDFS
+      block:
+        - name: Formatear HDFS e iniciar servicios (Modo Pseudo-distribuido básico)
+          shell: |
+            export JAVA_HOME={{ java_home }}
+            {{ hadoop_home }}/bin/hdfs namenode -format -force
+            {{ hadoop_home }}/sbin/start-dfs.sh
+            {{ hadoop_home }}/sbin/start-yarn.sh
+          ignore_errors: yes
 
-    - name: Ajustar permisos del archivo JSON final
-      file:
-        path: /var/www/html/data/datos.json
-        owner: www-data
-        group: www-data
-        mode: '0644'
+        - name: Crear carpetas y subir datos a HDFS
+          shell: |
+            {{ hadoop_home }}/bin/hdfs dfs -mkdir -p /input/conductores
+            {{ hadoop_home }}/bin/hdfs dfs -put -f /opt/censo/conductores.csv /input/conductores/
+
+        - name: Ejecutar Hadoop Streaming
+          shell: |
+            export JAVA_HOME={{ java_home }}
+            {{ hadoop_home }}/bin/hadoop jar {{ hadoop_home }}/share/hadoop/tools/lib/hadoop-streaming-{{ hadoop_ver }}.jar \
+            -files /opt/censo/mapper_provincia.py,/opt/censo/reducer.py \
+            -mapper "python3 /opt/censo/mapper_provincia.py" \
+            -reducer "python3 /opt/censo/reducer.py" \
+            -input /input/conductores/conductores.csv \
+            -output /output/censo_{{ ansible_date_time.epoch }}
+
+        - name: Exportar JSON final para la Web
+          shell: |
+            {{ hadoop_home }}/bin/hdfs dfs -getmerge /output/censo_{{ ansible_date_time.epoch }} /var/www/html/data/datos.json
+            chown www-data:www-data /var/www/html/data/datos.json
+            chmod 644 /var/www/html/data/datos.json
+
+      when: inventory_hostname == groups['ec2hosts'][0]

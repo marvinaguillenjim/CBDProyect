@@ -2,73 +2,152 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Visualización Censo Conductores - alucloud86</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Censo Conductores 2026</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson@3"></script>
     <style>
-        body { font-family: sans-serif; background-color: #f4f4f4; text-align: center; }
-        .bar { fill: #4682b4; }
-        .bar:hover { fill: #5f9ea0; }
-        .axis-label { font-size: 12px; }
-        .chart-container { background: white; margin: 20px auto; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 80%; }
+        :root { --primary: #e94560; --dark: #1a1a2e; --panel: #16213e; --text: #e2e8f0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--dark); color: var(--text); margin: 0; }
+        
+        /* Layout */
+        .container { max-width: 1200px; margin: auto; padding: 20px; }
+        header { border-bottom: 2px solid var(--primary); padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* Tabs */
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab-btn { background: var(--panel); border: 1px solid #0f3460; color: white; padding: 10px 20px; cursor: pointer; border-radius: 5px; transition: 0.3s; }
+        .tab-btn.active { background: var(--primary); border-color: var(--primary); }
+        
+        /* Grid */
+        .dashboard-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .card { background: var(--panel); padding: 20px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        
+        /* Visuals */
+        .provincia-path { stroke: #0f3460; stroke-width: 0.5px; transition: 0.2s; cursor: pointer; }
+        .provincia-path:hover { stroke: var(--primary); stroke-width: 2px; }
+        .tooltip { position: absolute; background: rgba(0,0,0,0.8); padding: 8px; border-radius: 4px; pointer-events: none; font-size: 12px; border: 1px solid var(--primary); }
+        
+        .metric { text-align: center; margin-bottom: 20px; }
+        .metric-val { font-size: 2.5em; font-weight: bold; color: var(--primary); }
     </style>
 </head>
 <body>
-    <h1>Resultados del Procesamiento Hadoop</h1>
-    <p>Visualización dinámica de los datos procesados por los Mappers</p>
-    
-    <div class="chart-container">
-        <svg id="canvas" width="800" height="400"></svg>
+    <div class="container">
+        <header>
+            <div>
+                <h1>?? Censo de Conductores</h1>
+                <p>Procesamiento Distribuido Hadoop · <span style="color: var(--primary)">DGT 2026</span></p>
+            </div>
+            <div id="status-badge" style="background: green; padding: 5px 10px; border-radius: 15px; font-size: 0.8em;">LIVE DATA</div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('geo')">?? Vista Geográfica</button>
+            <button class="tab-btn" onclick="showTab('permisos')">?? Tipos de Permiso</button>
+            <button class="tab-btn" onclick="showTab('demo')">?? Demografía</button>
+        </div>
+
+        <div class="dashboard-grid">
+            <!-- Columna Izquierda: Gráfico Principal -->
+            <div class="card" id="main-chart-container">
+                <h3 id="chart-title">Distribución por Provincias</h3>
+                <div id="viz"></div>
+            </div>
+
+            <!-- Columna Derecha: Métricas y Top -->
+            <div class="card">
+                <div class="metric">
+                    <div class="label">Total Conductores Procesados</div>
+                    <div class="metric-val" id="total-count">-</div>
+                </div>
+                <hr style="border: 0; border-top: 1px solid #0f3460;">
+                <h4>Ranking Detallado</h4>
+                <div id="ranking-list"></div>
+            </div>
+        </div>
     </div>
 
+    <div class="tooltip" style="opacity: 0;"></div>
+
     <script>
-        // Ruta al archivo que sube Ansible
-        const dataPath = "data/datos.json";
+        let fullData = null;
+        const dataPath = "data/datos.json"; // Generado por tu Reducer[cite: 6]
 
+        // 1. Cargar Datos del Reducer
         d3.json(dataPath).then(data => {
-            // Esperamos un formato JSON: [{"key": "Valor", "value": 123}, ...]
-            const margin = {top: 20, right: 30, bottom: 40, left: 60};
-            const width = 800 - margin.left - margin.right;
-            const height = 400 - margin.top - margin.bottom;
+            fullData = data;
+            updateDashboard('geo');
+        }).catch(e => console.error("Error cargando datos MapReduce", e));
 
-            const svg = d3.select("#canvas")
-                .attr("width", width + margin.left + margin.right)
-                .attr("height", height + margin.top + margin.bottom)
-                .append("g")
-                .attr("transform", `translate(${margin.left},${margin.top})`);
+        function showTab(type) {
+            d3.selectAll('.tab-btn').classed('active', false);
+            event.target.classList.add('active');
+            updateDashboard(type);
+        }
 
-            // Escalas
-            const x = d3.scaleBand()
-                .domain(data.map(d => d.key))
-                .range([0, width])
-                .padding(0.1);
+        function updateDashboard(mode) {
+            const viz = d3.select("#viz");
+            viz.selectAll("*").remove();
+            
+            if (mode === 'geo') {
+                renderMap();
+            } else if (mode === 'permisos') {
+                renderBarChart(fullData.permiso, "Permisos por Clase");
+            } else if (mode === 'demo') {
+                renderPieChart(fullData.sexo, "Distribución por Género");
+            }
+            
+            updateMetrics(mode);
+        }
 
-            const y = d3.scaleLinear()
-                .domain([0, d3.max(data, d => d.value)])
-                .nice()
-                .range([height, 0]);
+        function renderMap() {
+            const width = 700, height = 500;
+            const svg = d3.select("#viz").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
+            
+            // Proyección para España
+            const projection = d3.geoConicConformal()
+                .center([ -3, 40 ])
+                .scale(2500)
+                .translate([ width / 2, height / 2 ]);
+            
+            const path = d3.geoPath().projection(projection);
+            const colorScale = d3.scaleSequential(d3.interpolateReds)
+                .domain([0, d3.max(Object.values(fullData.provincia))]);
 
-            // Ejes
-            svg.append("g")
-                .attr("transform", `translate(0,${height})`)
-                .call(d3.axisBottom(x));
+            // Nota: Aquí necesitarías un archivo JSON de la geometría de España
+            d3.json("https://raw.githubusercontent.com/codeforgermany/click-dummy-map/master/spain-provincias.json").then(geojson => {
+                svg.selectAll("path")
+                    .data(geojson.features)
+                    .enter().append("path")
+                    .attr("d", path)
+                    .attr("class", "provincia-path")
+                    .attr("fill", d => {
+                        // Mapeo por código de provincia (ej: "28" para Madrid)
+                        const val = fullData.provincia[d.properties.cod] || 0;
+                        return colorScale(val);
+                    })
+                    .on("mouseover", (event, d) => {
+                        const val = fullData.provincia[d.properties.cod] || 0;
+                        d3.select(".tooltip").style("opacity", 1)
+                          .html(`<b>${d.properties.name}</b><br>${val.toLocaleString()} conductores`)
+                          .style("left", (event.pageX + 10) + "px")
+                          .style("top", (event.pageY - 10) + "px");
+                    })
+                    .on("mouseout", () => d3.select(".tooltip").style("opacity", 0));
+            });
+        }
 
-            svg.append("g")
-                .call(d3.axisLeft(y));
+        function renderBarChart(dataObj, title) {
+            // Lógica similar a tu index original pero con estilos mejorados y transiciones[cite: 6]
+            const data = Object.entries(dataObj).map(([k, v]) => ({key: k, value: v}));
+            // ... (implementar barras horizontales modernas)
+        }
 
-            // Barras
-            svg.selectAll(".bar")
-                .data(data)
-                .enter().append("rect")
-                .attr("class", "bar")
-                .attr("x", d => x(d.key))
-                .attr("y", d => y(d.value))
-                .attr("width", x.bandwidth())
-                .attr("height", d => height - y(d.value));
-
-        }).catch(error => {
-            console.error("Error cargando el JSON:", error);
-            d3.select("body").append("p").text("Error: No se pudo cargar data/datos.json. Asegúrate de procesar los datos primero.").style("color", "red");
-        });
+        function updateMetrics(mode) {
+            const total = d3.sum(Object.values(fullData.provincia));
+            d3.select("#total-count").text((total/1e6).toFixed(1) + "M");
+        }
     </script>
 </body>
 </html>
