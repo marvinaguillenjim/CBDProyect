@@ -71,83 +71,117 @@
     <div class="tooltip" style="opacity: 0;"></div>
 
     <script>
-        let fullData = null;
-        const dataPath = "data/datos.json"; // Generado por tu Reducer[cite: 6]
+       let fullData = null;
+    const dataPath = "data/resultados.json";
 
-        // 1. Cargar Datos del Reducer
-        d3.json(dataPath).then(data => {
-            fullData = data;
-            updateDashboard('geo');
-        }).catch(e => console.error("Error cargando datos MapReduce", e));
+    // 1. Cargar Datos
+    d3.json(dataPath).then(data => {
+        fullData = data;
+        updateDashboard('geo');
+    }).catch(e => console.error("Error cargando datos:", e));
 
-        function showTab(type) {
-            d3.selectAll('.tab-btn').classed('active', false);
-            event.target.classList.add('active');
-            updateDashboard(type);
+    function showTab(type) {
+        d3.selectAll('.tab-btn').classed('active', false);
+        d3.select(event.target).classed('active', true);
+        updateDashboard(type);
+    }
+
+    function updateDashboard(mode) {
+        const viz = d3.select("#viz");
+        viz.selectAll("*").remove();
+
+        if (mode === 'geo') {
+            renderMap();
+        } else if (mode === 'permisos') {
+            // Usamos antiguedad porque es lo que genera tu reducer
+            renderBarChart(fullData.antiguedad, "Antigüedad de Permisos");
+        } else if (mode === 'demo') {
+            renderPieChart(fullData.sexo, "Distribución por Género");
         }
+        updateMetrics(mode);
+    }
 
-        function updateDashboard(mode) {
-            const viz = d3.select("#viz");
-            viz.selectAll("*").remove();
-            
-            if (mode === 'geo') {
-                renderMap();
-            } else if (mode === 'permisos') {
-                renderBarChart(fullData.permiso, "Permisos por Clase");
-            } else if (mode === 'demo') {
-                renderPieChart(fullData.sexo, "Distribución por Género");
-            }
-            
-            updateMetrics(mode);
-        }
+    function renderBarChart(dataObj, title) {
+        // Limpiamos espacios de las claves del dataset
+        const data = Object.entries(dataObj)
+            .map(([k, v]) => ({key: k.trim(), value: v}))
+            .sort((a, b) => b.value - a.value);
 
-        function renderMap() {
-            const width = 700, height = 500;
-            const svg = d3.select("#viz").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
-            
-            // Proyección para España
-            const projection = d3.geoConicConformal()
-                .center([ -3, 40 ])
-                .scale(2500)
-                .translate([ width / 2, height / 2 ]);
-            
-            const path = d3.geoPath().projection(projection);
-            const colorScale = d3.scaleSequential(d3.interpolateReds)
-                .domain([0, d3.max(Object.values(fullData.provincia))]);
+        const width = 700, height = 400, margin = {top: 20, right: 30, bottom: 40, left: 120};
+        const svg = d3.select("#viz").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
 
-            // Nota: Aquí necesitarías un archivo JSON de la geometría de España
-            d3.json("https://raw.githubusercontent.com/codeforgermany/click-dummy-map/master/spain-provincias.json").then(geojson => {
-                svg.selectAll("path")
-                    .data(geojson.features)
-                    .enter().append("path")
-                    .attr("d", path)
-                    .attr("class", "provincia-path")
-                    .attr("fill", d => {
-                        // Mapeo por código de provincia (ej: "28" para Madrid)
-                        const val = fullData.provincia[d.properties.cod] || 0;
-                        return colorScale(val);
-                    })
-                    .on("mouseover", (event, d) => {
-                        const val = fullData.provincia[d.properties.cod] || 0;
-                        d3.select(".tooltip").style("opacity", 1)
-                          .html(`<b>${d.properties.name}</b><br>${val.toLocaleString()} conductores`)
-                          .style("left", (event.pageX + 10) + "px")
-                          .style("top", (event.pageY - 10) + "px");
-                    })
-                    .on("mouseout", () => d3.select(".tooltip").style("opacity", 0));
-            });
-        }
+        const x = d3.scaleLinear().domain([0, d3.max(data, d => d.value)]).range([margin.left, width - margin.right]);
+        const y = d3.scaleBand().domain(data.map(d => d.key)).range([margin.top, height - margin.bottom]).padding(0.1);
 
-        function renderBarChart(dataObj, title) {
-            // Lógica similar a tu index original pero con estilos mejorados y transiciones[cite: 6]
-            const data = Object.entries(dataObj).map(([k, v]) => ({key: k, value: v}));
-            // ... (implementar barras horizontales modernas)
-        }
+        svg.append("g")
+            .selectAll("rect")
+            .data(data)
+            .join("rect")
+            .attr("x", x(0))
+            .attr("y", d => y(d.key))
+            .attr("width", d => x(d.value) - x(0))
+            .attr("height", y.bandwidth())
+            .attr("fill", "#e94560");
 
-        function updateMetrics(mode) {
-            const total = d3.sum(Object.values(fullData.provincia));
-            d3.select("#total-count").text((total/1e6).toFixed(1) + "M");
-        }
+        svg.append("g")
+            .attr("transform", `translate(${margin.left},0)`)
+            .call(d3.axisLeft(y).tickSize(0));
+    }
+
+    function renderPieChart(dataObj, title) {
+        const data = Object.entries(dataObj).map(([k, v]) => ({key: k, value: v}));
+        const width = 400, height = 400, radius = Math.min(width, height) / 2;
+        const svg = d3.select("#viz").append("svg")
+            .attr("viewBox", `0 0 ${width} ${height}`)
+            .append("g")
+            .attr("transform", `translate(${width / 2},${height / 2})`);
+
+        const color = d3.scaleOrdinal().domain(["M", "V"]).range(["#e94560", "#0f3460"]);
+        const pie = d3.pie().value(d => d.value);
+        const arc = d3.arc().innerRadius(0).outerRadius(radius);
+
+        svg.selectAll("path")
+            .data(pie(data))
+            .join("path")
+            .attr("d", arc)
+            .attr("fill", d => color(d.data.key))
+            .attr("stroke", "white");
+    }
+
+    function renderMap() {
+        const width = 700, height = 500;
+        const svg = d3.select("#viz").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
+        const projection = d3.geoConicConformal().center([ -3, 40 ]).scale(2500).translate([ width / 2, height / 2 ]);
+        const path = d3.geoPath().projection(projection);
+        
+        const colorScale = d3.scaleSequential(d3.interpolateReds)
+            .domain([0, d3.max(Object.values(fullData.provincia))]);
+
+        d3.json("https://raw.githubusercontent.com/codeforgermany/click-dummy-map/master/spain-provincias.json").then(geojson => {
+            svg.selectAll("path")
+                .data(geojson.features)
+                .enter().append("path")
+                .attr("d", path)
+                .attr("class", "provincia-path")
+                .attr("fill", d => {
+                    const val = fullData.provincia[d.properties.cod] || 0;
+                    return colorScale(val);
+                })
+                .on("mouseover", (event, d) => {
+                    const val = fullData.provincia[d.properties.cod] || 0;
+                    d3.select(".tooltip").style("opacity", 1)
+                      .html(`<b>${d.properties.name}</b><br>${val.toLocaleString()} conductores`)
+                      .style("left", (event.pageX + 10) + "px")
+                      .style("top", (event.pageY - 10) + "px");
+                })
+                .on("mouseout", () => d3.select(".tooltip").style("opacity", 0));
+        });
+    }
+
+    function updateMetrics(mode) {
+        const total = d3.sum(Object.values(fullData.provincia));
+        d3.select("#total-count").text((total/1e6).toFixed(1) + "M");
+    }
     </script>
 </body>
 </html>

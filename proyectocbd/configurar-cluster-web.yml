@@ -1,6 +1,6 @@
----
-# Proyecto: Despliegue de Clúster Hadoop, Servidor Web y Visualización D3.js
-# Configuración: Hadoop 3.3.1 + Apache2 + Python Streaming (Corregido)
+  # Proyecto: Despliegue de Clúster Hadoop Distribuido (4 Nodos) - CORREGIDO
+# Configuración: Hadoop 3.3.1 + Apache2 + Python Streaming
+# Optimizaciones: Uso de IPs privadas para comunicación interna y límites de RAM
 
 #####################
 # 1. PROVISIÓN DE VMs
@@ -10,9 +10,10 @@
   connection: local
   tags: [provision]
   vars:
-    instance_type: t2.micro
-    image: ami-0c7217cdde317cfec # Ubuntu 22.04 LTS en us-east-1
-    subnet_id: subnet-2bfb6c4f 
+    instance_type: t3.small
+    image: ami-0c7217cdde317cfec
+    subnet_id: subnet-2bfb6c4f
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no' 
   tasks:
     - name: Provisioning EC2 instance(s)
       local_action: ec2
@@ -29,7 +30,10 @@
       run_once: true
 
     - name: Add new instance to host group
-      local_action: add_host hostname={{ item.public_ip }} groupname=ec2hosts
+      local_action: add_host 
+        hostname={{ item.public_ip }} 
+        groupname=ec2hosts 
+        private_ip={{ item.private_ip }}
       with_items: "{{ ec2vms.instances }}"
 
     - name: Waiting for the new instance(s) to be ready
@@ -48,6 +52,10 @@
     hadoop_ver: "3.3.1"
     hadoop_home: "/usr/local/hadoop"
     java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
+    # El primer nodo de la lista será el Maestro
+    master_node: "{{ groups['ec2hosts'][0] }}"
+    # EXTRAEMOS LA IP PRIVADA DEL MAESTRO PARA HADOOP
+    master_private_ip: "{{ hostvars[master_node]['private_ip'] }}"
 
   tasks:
     - name: Wait for cloud-init to finish
@@ -55,17 +63,43 @@
         path: /var/log/cloud-init.log
         timeout: 300
         search_regex: "final-message"
-      register: cloud_init_check
       ignore_errors: yes
 
-    - name: Instalar Dependencias (Java y Apache)
+    - name: Instalar Dependencias (Java, Apache y Net-tools)
       apt:
-        name: "{{ item }}"
+        name: [openjdk-11-jdk, apache2, net-tools]
         update_cache: yes
         state: present
-      with_items:
-        - openjdk-11-jdk
-        - apache2
+
+    # --- BLOQUE CRÍTICO: CONFIGURACIÓN SSH PARA HADOOP ---
+    - name: Generar llave SSH para el usuario ubuntu en todos los nodos
+      user:
+        name: ubuntu
+        generate_ssh_key: yes
+        ssh_key_bits: 2048
+        ssh_key_file: .ssh/id_rsa
+
+    - name: Leer la llave pública generada en el MAESTRO
+      shell: cat /home/ubuntu/.ssh/id_rsa.pub
+      register: master_ssh_key
+      when: inventory_hostname == master_node
+
+    - name: Autorizar la llave del Maestro en todos los nodos
+      authorized_key:
+        user: ubuntu
+        state: present
+        key: "{{ hostvars[master_node]['master_ssh_key']['stdout'] }}"
+
+    - name: Configurar SSH para evitar confirmación manual de hosts
+      copy:
+        content: |
+          Host *
+              StrictHostKeyChecking no
+              UserKnownHostsFile /dev/null
+        dest: /home/ubuntu/.ssh/config
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
 
     # --- INSTALACIÓN DE HADOOP ---
     - name: Descargar Hadoop {{ hadoop_ver }}
@@ -88,15 +122,33 @@
         owner: ubuntu
         group: ubuntu
 
-    # --- CONFIGURACIÓN DE ARCHIVOS HADOOP (NUEVO) ---
-    - name: Configurar core-site.xml
+    # --- CORRECCIÓN JAVA_HOME Y RAM ---
+    - name: Forzar JAVA_HOME y límites de RAM en hadoop-env.sh
+      blockinfile:
+        path: "{{ hadoop_home }}/etc/hadoop/hadoop-env.sh"
+        block: |
+          export JAVA_HOME={{ java_home }}
+          export HADOOP_NAMENODE_OPTS="-Xmx600m"
+          export HADOOP_DATANODE_OPTS="-Xmx512m"
+          export YARN_RESOURCEMANAGER_OPTS="-Xmx512m"
+
+    - name: Configurar archivo de workers (Usando IPs privadas)
+      copy:
+        content: |
+          {% for host in groups['ec2hosts'] %}
+          {{ hostvars[host]['private_ip'] }}
+          {% endfor %}
+        dest: "{{ hadoop_home }}/etc/hadoop/workers"
+        owner: ubuntu
+
+    - name: Configurar core-site.xml (Usando IP Privada del Maestro)
       blockinfile:
         path: "{{ hadoop_home }}/etc/hadoop/core-site.xml"
         insertafter: "<configuration>"
         block: |
           <property>
               <name>fs.defaultFS</name>
-              <value>hdfs://localhost:9000</value>
+              <value>hdfs://{{ master_private_ip }}:9000</value>
           </property>
 
     - name: Configurar hdfs-site.xml
@@ -106,7 +158,7 @@
         block: |
           <property>
               <name>dfs.replication</name>
-              <value>1</value>
+              <value>2</value>
           </property>
 
     - name: Configurar Variables de Entorno en .bashrc
@@ -116,14 +168,11 @@
           export JAVA_HOME={{ java_home }}
           export HADOOP_HOME={{ hadoop_home }}
           export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
-          # Usuarios necesarios para Hadoop 3
           export HDFS_NAMENODE_USER=ubuntu
           export HDFS_DATANODE_USER=ubuntu
-          export HDFS_SECONDARYNAMENODE_USER=ubuntu
           export YARN_RESOURCEMANAGER_USER=ubuntu
           export YARN_NODEMANAGER_USER=ubuntu
 
-    # --- PREPARACIÓN DE ARCHIVOS DEL PROYECTO ---
     - name: Crear estructura de directorios local
       file:
         path: "{{ item }}"
@@ -140,7 +189,7 @@
         dest: /var/www/html/index.html
         owner: www-data
         mode: '0644'
-      when: inventory_hostname == groups['ec2hosts'][0]
+      when: inventory_hostname == master_node
 
     - name: Copiar Dataset y Mappers
       copy:
@@ -152,22 +201,32 @@
         - { src: './files/mapper_provincia.py', dest: '/opt/censo/mapper_provincia.py' }
         - { src: './files/reducer.py', dest: '/opt/censo/reducer.py' }
 
-    # --- FLUJO DE TRABAJO HADOOP (Solo en Maestro) ---
-    - name: Procesamiento MapReduce en HDFS
+   # --- FLUJO DE TRABAJO HADOOP (Solo en Maestro) ---
+    - name: Procesamiento MapReduce en Maestro
       block:
         - name: Formatear HDFS e iniciar servicios
           shell: |
-            export JAVA_HOME={{ java_home }}
-            export HDFS_NAMENODE_USER=ubuntu
-            export HDFS_DATANODE_USER=ubuntu
-            export HDFS_SECONDARYNAMENODE_USER=ubuntu
-            export YARN_RESOURCEMANAGER_USER=ubuntu
-            export YARN_NODEMANAGER_USER=ubuntu
+            # 1. Limpieza total
+            pkill -9 -u ubuntu java || true
+            rm -rf /tmp/hadoop-ubuntu*
             
-            # Formatear solo si no está formateado e iniciar
+            # 2. Formateo
             {{ hadoop_home }}/bin/hdfs namenode -format -force
+            
+            # 3. Arranque
             {{ hadoop_home }}/sbin/start-dfs.sh
             {{ hadoop_home }}/sbin/start-yarn.sh
+            
+            # 4. Bucle de espera inteligente al puerto 9000
+            for i in {1..50}; do
+              if netstat -tuln | grep -q ":9000"; then 
+                echo "Hadoop activo en intento $i"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "Error: El puerto 9000 no abrio tras 250 segundos"
+            exit 1
           become_user: ubuntu
 
         - name: Crear carpetas y subir datos a HDFS
@@ -176,27 +235,23 @@
             {{ hadoop_home }}/bin/hdfs dfs -put -f /opt/censo/conductores.csv /input/conductores/
           become_user: ubuntu
 
-        - name: Ejecutar Hadoop Streaming
+        - name: Ejecutar Job MapReduce (Streaming)
           shell: |
-            export JAVA_HOME={{ java_home }}
-            {{ hadoop_home }}/bin/hadoop jar {{ hadoop_home }}/share/hadoop/tools/lib/hadoop-streaming-{{ hadoop_ver }}.jar \
-            -files /opt/censo/mapper_provincia.py,/opt/censo/reducer.py \
-            -mapper "python3 /opt/censo/mapper_provincia.py" \
-            -reducer "python3 /opt/censo/reducer.py" \
-            -input /input/conductores/conductores.csv \
-            -output /output/censo_{{ ansible_date_time.epoch }}
+            HADOOP_STREAMING_JAR=$(find {{ hadoop_home }}/share/hadoop/tools/lib/ -name "hadoop-streaming*.jar" | head -n 1)
+            {{ hadoop_home }}/bin/hdfs dfs -rm -r /output/censo_resultados || true
+            
+            {{ hadoop_home }}/bin/hadoop jar $HADOOP_STREAMING_JAR \
+              -files /opt/censo/mapper_provincia.py,/opt/censo/reducer.py \
+              -mapper "python3 mapper_provincia.py" \
+              -reducer "python3 reducer.py" \
+              -input /input/conductores/conductores.csv \
+              -output /output/censo_resultados
           become_user: ubuntu
 
-        - name: Exportar JSON final para la Web
+        - name: Exportar resultados para el Dashboard HTML
           shell: |
-            {{ hadoop_home }}/bin/hdfs dfs -getmerge /output/censo_{{ ansible_date_time.epoch }} /var/www/html/data/datos.json
+            {{ hadoop_home }}/bin/hdfs dfs -cat /output/censo_resultados/part-* > /tmp/resultados.json
+            sudo cp /tmp/resultados.json /var/www/html/data/resultados.json
+            sudo chmod 644 /var/www/html/data/resultados.json
           become_user: ubuntu
-
-        - name: Ajustar permisos del JSON para Apache
-          file:
-            path: /var/www/html/data/datos.json
-            owner: www-data
-            group: www-data
-            mode: '0644'
-
-      when: inventory_hostname == groups['ec2hosts'][0]
+      when: inventory_hostname == master_node

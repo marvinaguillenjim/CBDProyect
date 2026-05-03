@@ -50,7 +50,7 @@ def main():
     # Convertir defaultdict a dict normal para serializar
     output = {k: dict(v) for k, v in resultados.items()}
 
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    print(json.dumps(output, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()
