@@ -1,0 +1,14 @@
+plugin: aws_ec2
+regions:
+  - us-east-1
+
+filters:
+  tag:ansible: alucloud90
+  instance-state-name: [ 'running' ]
+
+keyed_groups:
+  - key: tags.ansible
+    prefix: tag_ansible_
+    separator: ""
+groups:
+  ec2hosts: "'alucloud90' in tags.ansible"

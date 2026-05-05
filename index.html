@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Censo Conductores 2026</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson@3"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #e94560;
+            --dark: #0a0a0f;
+            --panel: #12121a;
+            --panel2: #16213e;
+            --border: #1e1e2e;
+            --text: #e2e8f0;
+            --muted: #5a5a7a;
+            --accent2: #ff8c42;
+            --glow: rgba(233,69,96,0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--dark);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Grain overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0.4;
+        }
+
+        .container { max-width: 1300px; margin: auto; padding: 24px; }
+
+        /* Header */
+        header {
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 14px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: clamp(1.8rem, 4vw, 3rem);
+            letter-spacing: 0.05em;
+            background: linear-gradient(135deg, var(--text) 0%, var(--primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        header p { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+
+        .live-dot {
+            display: inline-block;
+            width: 7px; height: 7px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+            margin-right: 6px;
+        }
+
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+        #status-badge {
+            background: #14532d;
+            border: 1px solid #4ade80;
+            color: #4ade80;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+        }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+
+        .tab-btn {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 10px 22px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: 0.25s;
+            font-size: 0.9rem;
+        }
+
+        .tab-btn:hover { border-color: var(--primary); color: var(--primary); }
+        .tab-btn.active { background: var(--primary); border-color: var(--primary); color: white; }
+
+        /* ===================== */
+        /* TAB 1: MAPA ANIMADO   */
+        /* ===================== */
+        #tab-animado {
+            display: grid;
+            grid-template-columns: 1fr 260px;
+            gap: 20px;
+            align-items: start;
+        }
+
+        .map-wrap {
+            position: relative;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .map-wrap::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            box-shadow: inset 0 0 60px var(--glow);
+            pointer-events: none;
+        }
+
+        #map-svg { width: 100%; height: auto; display: block; }
+
+        .year-overlay {
+            position: absolute;
+            bottom: 16px; left: 20px;
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: clamp(3rem, 8vw, 7rem);
+            color: rgba(233,69,96,0.1);
+            line-height: 1;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .anim-sidebar { display: flex; flex-direction: column; gap: 14px; }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 14px;
+        }
+
+        .panel-title {
+            font-size: 0.6rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 6px;
+        }
+
+        .stat-big {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 2rem;
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .stat-label { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+
+        /* Ranking animado */
+        .rank-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(30,30,46,0.5);
+        }
+
+        .rank-num { font-size: 0.6rem; color: var(--muted); width: 14px; text-align: right; }
+        .rank-bar-wrap { flex: 1; }
+        .rank-name { font-size: 0.62rem; color: var(--text); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rank-bar { height: 3px; background: linear-gradient(90deg, var(--primary), var(--accent2)); border-radius: 2px; transition: width 0.5s ease; }
+        .rank-val { font-size: 0.6rem; color: var(--primary); min-width: 38px; text-align: right; }
+
+        /* Legend */
+        #legend-svg { width: 100%; }
+
+        /* Selected info */
+        #selected-info { font-size: 0.7rem; color: var(--muted); }
+
+        /* Controls */
+        .controls {
+            display: flex; align-items: center; gap: 14px;
+            margin-top: 16px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px 16px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-family: 'DM Mono', monospace;
+            font-size: 0.65rem;
+            letter-spacing: 0.1em;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 3px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+
+        .btn:hover, .btn.active { border-color: var(--primary); color: var(--primary); box-shadow: 0 0 10px var(--glow); }
+
+        .speed-btns { display: flex; gap: 4px; }
+
+        .speed-btn {
+            background: none; border: 1px solid var(--border);
+            color: var(--muted); font-family: 'DM Mono', monospace;
+            font-size: 0.55rem; padding: 4px 8px;
+            cursor: pointer; border-radius: 2px; transition: all 0.2s;
+        }
+
+        .speed-btn.active { border-color: var(--primary); color: var(--primary); }
+
+        .timeline { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 200px; }
+
+        #year-slider {
+            flex: 1; -webkit-appearance: none; appearance: none;
+            height: 2px; background: var(--border); outline: none; border-radius: 2px;
+        }
+
+        #year-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 14px; height: 14px;
+            background: var(--primary); border-radius: 50%; cursor: pointer;
+            box-shadow: 0 0 8px var(--glow);
+        }
+
+        .year-label { font-family: 'Bebas Neue', sans-serif; font-size: 1.1rem; color: var(--primary); min-width: 48px; }
+
+        /* Province paths */
+        .provincia { stroke: #0a0a0f; stroke-width: 0.5px; cursor: pointer; transition: stroke 0.2s, stroke-width 0.2s; }
+        .provincia:hover { stroke: var(--primary); stroke-width: 1.5px; }
+        .provincia.highlighted { stroke: white; stroke-width: 1.2px; }
+
+        /* Tooltip */
+        .tooltip-anim {
+            position: fixed; background: rgba(10,10,15,0.95);
+            border: 1px solid var(--primary); border-radius: 3px;
+            padding: 10px 14px; pointer-events: none; font-size: 0.72rem;
+            opacity: 0; transition: opacity 0.15s; z-index: 999;
+            backdrop-filter: blur(8px);
+        }
+
+        .tooltip-anim strong {
+            display: block; font-family: 'Bebas Neue', sans-serif;
+            font-size: 1rem; color: var(--primary); letter-spacing: 0.05em; margin-bottom: 2px;
+        }
+
+        /* ======================= */
+        /* TABS 2 y 3: DASHBOARD   */
+        /* ======================= */
+        #tab-permisos, #tab-demo { display: none; }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--panel2);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .card h3 { margin-bottom: 12px; font-size: 1rem; color: var(--text); }
+
+        .metric { text-align: center; margin-bottom: 20px; }
+        .metric .label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+        .metric-val { font-size: 2.5em; font-weight: bold; color: var(--primary); font-family: 'Bebas Neue', sans-serif; }
+
+        #ranking-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+
+        .ranking-row {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 0.75rem; padding: 4px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ranking-row .rk-num { color: var(--muted); width: 20px; }
+        .ranking-row .rk-name { flex: 1; }
+        .ranking-row .rk-val { color: var(--primary); font-weight: 600; }
+
+        /* Tab hidden helper */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        #tab-animado-wrap { display: none; }
+        #tab-animado-wrap.active { display: block; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div>
+            <h1>🚗 Censo de Conductores</h1>
+            <p><span class="live-dot"></span>Procesamiento Distribuido Hadoop · <span style="color: var(--primary)">DGT 2026</span></p>
+        </div>
+        <div id="status-badge">⬤ LIVE DATA</div>
+    </header>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('animado', this)">🗺️ Evolución Temporal</button>
+        <button class="tab-btn" onclick="switchTab('permisos', this)">📊 Antigüedad de Permisos</button>
+        <button class="tab-btn" onclick="switchTab('demo', this)">👥 Demografía</button>
+    </div>
+
+    <!-- TAB 1: MAPA ANIMADO -->
+    <div id="tab-animado-wrap" class="active">
+        <div id="tab-animado">
+            <div class="map-wrap">
+                <svg id="map-svg" viewBox="0 0 900 560"></svg>
+                <div class="year-overlay" id="year-bg">2013</div>
+            </div>
+            <div class="anim-sidebar">
+                <div class="panel">
+                    <div class="panel-title">Total acumulado</div>
+                    <div class="stat-big" id="hdr-total">—</div>
+                    <div class="stat-label" id="hdr-year-lbl">conductores hasta —</div>
+                </div>
+                <div class="panel">
+                    <div class="panel-title">Top 10 Provincias</div>
+                    <div id="ranking"></div>
+                </div>
+                <div class="panel">
+                    <div class="panel-title">Escala de color</div>
+                    <svg id="legend-svg" viewBox="0 0 230 40"></svg>
+                </div>
+                <div class="panel">
+                    <div class="panel-title">Provincia seleccionada</div>
+                    <div id="selected-info">Haz clic en una provincia del mapa</div>
+                </div>
+            </div>
+        </div>
+        <div class="controls">
+            <button class="btn" id="play-btn">▶ PLAY</button>
+            <div class="speed-btns">
+                <button class="speed-btn active" data-speed="800">1×</button>
+                <button class="speed-btn" data-speed="400">2×</button>
+                <button class="speed-btn" data-speed="200">4×</button>
+            </div>
+            <div class="timeline">
+                <input type="range" id="year-slider" min="2013" max="2026" value="2013" step="1">
+                <span class="year-label" id="slider-year">2013</span>
+            </div>
+            <button class="btn" id="reset-btn">↺ REINICIAR</button>
+        </div>
+    </div>
+
+    <!-- TAB 2: ANTIGÜEDAD -->
+    <div id="tab-permisos-wrap" class="tab-content">
+        <div class="dashboard-grid">
+            <div class="card">
+                <h3>📊 Antigüedad de Permisos de Conducción</h3>
+                <div id="viz-permisos"></div>
+            </div>
+            <div class="card">
+                <div class="metric">
+                    <div class="label">Total Conductores Procesados</div>
+                    <div class="metric-val" id="total-count-p">—</div>
+                </div>
+                <hr style="border:0;border-top:1px solid var(--border);margin-bottom:10px">
+                <h4 style="font-size:0.85rem;margin-bottom:8px">Ranking por Antigüedad</h4>
+                <div id="ranking-list-p"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB 3: DEMOGRAFÍA -->
+    <div id="tab-demo-wrap" class="tab-content">
+        <div class="dashboard-grid">
+            <div class="card">
+                <h3>👥 Distribución por Género</h3>
+                <div id="viz-demo"></div>
+            </div>
+            <div class="card">
+                <div class="metric">
+                    <div class="label">Total Conductores Procesados</div>
+                    <div class="metric-val" id="total-count-d">—</div>
+                </div>
+                <hr style="border:0;border-top:1px solid var(--border);margin-bottom:10px">
+                <h4 style="font-size:0.85rem;margin-bottom:8px">Desglose por Género</h4>
+                <div id="ranking-list-d"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="tooltip-anim" id="tooltip-anim"></div>
+
+<script>
+// ================================
+// TAB SWITCHING
+// ================================
+function switchTab(name, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    document.getElementById('tab-animado-wrap').classList.remove('active');
+    document.getElementById('tab-permisos-wrap').classList.remove('active');
+    document.getElementById('tab-demo-wrap').classList.remove('active');
+
+    if (name === 'animado') {
+        document.getElementById('tab-animado-wrap').classList.add('active');
+    } else if (name === 'permisos') {
+        document.getElementById('tab-permisos-wrap').classList.add('active');
+        renderPermisos();
+    } else if (name === 'demo') {
+        document.getElementById('tab-demo-wrap').classList.add('active');
+        renderDemo();
+    }
+}
+
+// ================================
+// DATOS
+// ================================
+let fullData = null;       // resultados.json {provincia, sexo, antiguedad}
+let temporalData = null;   // resultados_temporal.json [{provincia, year, conductores}]
+let dataByYear = {};
+let maxVal = 0;
+let permisosRendered = false;
+let demoRendered = false;
+
+const PROV_NAMES = {
+    "01":"Álava","02":"Albacete","03":"Alicante","04":"Almería","05":"Ávila",
+    "06":"Badajoz","07":"Islas Baleares","08":"Barcelona","09":"Burgos","10":"Cáceres",
+    "11":"Cádiz","12":"Castellón","13":"Ciudad Real","14":"Córdoba","15":"La Coruña",
+    "16":"Cuenca","17":"Gerona","18":"Granada","19":"Guadalajara","20":"Guipúzcoa",
+    "21":"Huelva","22":"Huesca","23":"Jaén","24":"León","25":"Lérida",
+    "26":"La Rioja","27":"Lugo","28":"Madrid","29":"Málaga","30":"Murcia",
+    "31":"Navarra","32":"Ourense","33":"Asturias","34":"Palencia","35":"Las Palmas",
+    "36":"Pontevedra","37":"Salamanca","38":"Santa Cruz de Tenerife","39":"Cantabria","40":"Segovia",
+    "41":"Sevilla","42":"Soria","43":"Tarragona","44":"Teruel","45":"Toledo",
+    "46":"Valencia","47":"Valladolid","48":"Vizcaya","49":"Zamora","50":"Zaragoza",
+    "51":"Ceuta","52":"Melilla"
+};
+
+// Cargar ambos JSON
+Promise.all([
+    d3.json("data/resultados.json"),
+    d3.json("data/resultados_temporal.json")
+]).then(([res, temp]) => {
+    fullData = res;
+    temporalData = temp;
+
+    temp.forEach(d => {
+        if (!dataByYear[d.year]) dataByYear[d.year] = {};
+        dataByYear[d.year][d.provincia] = d.conductores;
+    });
+    maxVal = d3.max(temp, d => d.conductores);
+    colorScale.domain([0, maxVal]);
+
+    initMap();
+    drawLegend();
+    updateYear(0);
+}).catch(e => console.error("Error cargando datos:", e));
+
+// ================================
+// MAPA ANIMADO
+// ================================
+const GEOJSON_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/spain-provinces.geojson";
+const years = d3.range(2013, 2027);
+let currentYearIdx = 0;
+let playing = false;
+let timer = null;
+let speed = 800;
+let selectedProv = null;
+
+const colorScale = d3.scaleSequential().interpolator(d3.interpolate("#12121a", "#e94560"));
+const svg = d3.select("#map-svg");
+const tooltipEl = d3.select("#tooltip-anim");
+
+function getCode(d) {
+    const name = d.properties.name;
+    return Object.entries(PROV_NAMES).find(([k, v]) =>
+        v.toLowerCase() === name?.toLowerCase() ||
+        name?.toLowerCase().includes(v.toLowerCase().split(" ")[0])
+    )?.[0] || null;
+}
+
+function initMap() {
+    d3.json(GEOJSON_URL).then(geo => {
+        const projection = d3.geoConicConformal()
+            .center([-3.7, 40.2]).scale(2800).translate([450, 280]);
+        const path = d3.geoPath().projection(projection);
+
+        svg.selectAll(".provincia")
+            .data(geo.features)
+            .join("path")
+            .attr("class", "provincia")
+            .attr("d", path)
+            .on("mousemove", (event, d) => {
+                const code = getCode(d);
+                const val = dataByYear[years[currentYearIdx]]?.[code] || 0;
+                tooltipEl.style("opacity", 1)
+                    .style("left", (event.clientX + 14) + "px")
+                    .style("top", (event.clientY - 40) + "px")
+                    .html(`<strong>${d.properties.name}</strong>${(val/1e6).toFixed(3)}M conductores`);
+            })
+            .on("mouseleave", () => tooltipEl.style("opacity", 0))
+            .on("click", (event, d) => {
+                const code = getCode(d);
+                selectedProv = selectedProv === code ? null : code;
+                svg.selectAll(".provincia").classed("highlighted", f => getCode(f) === selectedProv);
+                if (selectedProv) updateSelectedInfo(code);
+                else document.getElementById("selected-info").textContent = "Haz clic en una provincia del mapa";
+            });
+
+        updateYear(0);
+    });
+}
+
+function updateYear(idx) {
+    currentYearIdx = idx;
+    const year = years[idx];
+    const yearData = dataByYear[year] || {};
+    const yearLabel = year === 2013 ? "< 2014" : String(year);
+
+    svg.selectAll(".provincia")
+        .transition().duration(300)
+        .attr("fill", d => {
+            const code = getCode(d);
+            return colorScale(code ? (yearData[code] || 0) : 0);
+        });
+
+    const total = d3.sum(Object.values(yearData));
+    document.getElementById("hdr-total").textContent = (total / 1e6).toFixed(2) + "M";
+    document.getElementById("hdr-year-lbl").textContent = `conductores hasta ${yearLabel}`;
+    document.getElementById("year-bg").textContent = yearLabel;
+    document.getElementById("slider-year").textContent = yearLabel;
+    document.getElementById("year-slider").value = year;
+
+    updateRanking(yearData);
+    if (selectedProv) updateSelectedInfo(selectedProv);
+}
+
+function updateRanking(yearData) {
+    const sorted = Object.entries(yearData)
+        .map(([k, v]) => ({ code: k, name: PROV_NAMES[k] || k, val: v }))
+        .filter(d => d.name)
+        .sort((a, b) => b.val - a.val)
+        .slice(0, 10);
+
+    const maxRank = sorted[0]?.val || 1;
+    const container = d3.select("#ranking");
+
+    const items = container.selectAll(".rank-item").data(sorted, d => d.code);
+    const enter = items.enter().append("div").attr("class", "rank-item");
+    enter.append("div").attr("class", "rank-num");
+    const bw = enter.append("div").attr("class", "rank-bar-wrap");
+    bw.append("div").attr("class", "rank-name");
+    bw.append("div").attr("class", "rank-bar");
+    enter.append("div").attr("class", "rank-val");
+
+    const merged = enter.merge(items);
+    merged.select(".rank-num").text((d, i) => i + 1);
+    merged.select(".rank-name").text(d => d.name);
+    merged.select(".rank-bar").style("width", d => (d.val / maxRank * 100) + "%");
+    merged.select(".rank-val").text(d => (d.val / 1e6).toFixed(2) + "M");
+    items.exit().remove();
+}
+
+function updateSelectedInfo(code) {
+    const name = PROV_NAMES[code] || code;
+    const history = years.map(y => ({ year: y, val: dataByYear[y]?.[code] || 0 }));
+    const current = history[currentYearIdx];
+    const prev = currentYearIdx > 0 ? history[currentYearIdx - 1].val : 0;
+    const delta = current.val - prev;
+    const yearLabel = years[currentYearIdx] === 2013 ? "< 2014" : String(years[currentYearIdx]);
+
+    document.getElementById("selected-info").innerHTML = `
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:1.1rem;color:var(--primary);margin-bottom:6px">${name}</div>
+        <div style="margin-bottom:4px">Total: <span style="color:var(--text)">${current.val.toLocaleString('es-ES')}</span></div>
+        <div style="margin-bottom:4px">${yearLabel}: 
+            <span style="color:${delta >= 0 ? '#4ade80' : '#ff3b5c'}">
+                ${delta >= 0 ? '+' : ''}${delta.toLocaleString('es-ES')}
+            </span>
+        </div>
+        <div style="margin-top:8px;font-size:0.55rem;color:var(--muted);letter-spacing:0.1em">HISTÓRICO</div>
+        <div style="margin-top:4px;display:flex;gap:2px;align-items:flex-end;height:30px">
+            ${history.map(h => {
+                const pct = maxVal > 0 ? (h.val / maxVal) : 0;
+                const isCurrent = h.year === years[currentYearIdx];
+                return `<div style="flex:1;height:${Math.max(2, pct * 30)}px;background:${isCurrent ? 'var(--primary)' : 'var(--border)'};border-radius:1px;transition:height 0.3s"></div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+function drawLegend() {
+    const lg = d3.select("#legend-svg");
+    const defs = lg.append("defs");
+    const grad = defs.append("linearGradient").attr("id", "leg-grad");
+    grad.append("stop").attr("offset", "0%").attr("stop-color", "#12121a");
+    grad.append("stop").attr("offset", "100%").attr("stop-color", "#e94560");
+    lg.append("rect").attr("x", 0).attr("y", 8).attr("width", 230).attr("height", 12).attr("rx", 2).attr("fill", "url(#leg-grad)");
+    lg.append("text").attr("x", 0).attr("y", 36).attr("fill", "#5a5a7a").attr("font-size", "9px").attr("font-family", "DM Mono, monospace").text("0");
+    lg.append("text").attr("x", 230).attr("y", 36).attr("fill", "#5a5a7a").attr("font-size", "9px").attr("font-family", "DM Mono, monospace").attr("text-anchor", "end").text((maxVal / 1e6).toFixed(1) + "M");
+}
+
+// Controles
+document.getElementById("play-btn").addEventListener("click", () => {
+    playing = !playing;
+    document.getElementById("play-btn").textContent = playing ? "⏸ PAUSA" : "▶ PLAY";
+    if (playing) {
+        if (currentYearIdx >= years.length - 1) currentYearIdx = 0;
+        tick();
+    } else clearTimeout(timer);
+});
+
+document.getElementById("reset-btn").addEventListener("click", () => {
+    playing = false; clearTimeout(timer);
+    document.getElementById("play-btn").textContent = "▶ PLAY";
+    updateYear(0);
+});
+
+document.getElementById("year-slider").addEventListener("input", function () {
+    clearTimeout(timer); playing = false;
+    document.getElementById("play-btn").textContent = "▶ PLAY";
+    const idx = years.indexOf(parseInt(this.value));
+    if (idx >= 0) updateYear(idx);
+});
+
+document.querySelectorAll(".speed-btn").forEach(btn => {
+    btn.addEventListener("click", function () {
+        document.querySelectorAll(".speed-btn").forEach(b => b.classList.remove("active"));
+        this.classList.add("active");
+        speed = parseInt(this.dataset.speed);
+    });
+});
+
+function tick() {
+    if (!playing) return;
+    if (currentYearIdx < years.length - 1) {
+        updateYear(currentYearIdx + 1);
+        timer = setTimeout(tick, speed);
+    } else {
+        playing = false;
+        document.getElementById("play-btn").textContent = "▶ PLAY";
+    }
+}
+
+// ================================
+// TAB 2: ANTIGÜEDAD DE PERMISOS
+// ================================
+function renderPermisos() {
+    if (permisosRendered || !fullData) return;
+    permisosRendered = true;
+
+    const dataObj = fullData.antiguedad || {};
+    const data = Object.entries(dataObj)
+        .map(([k, v]) => ({ key: k.trim(), value: v }))
+        .sort((a, b) => b.value - a.value);
+
+    const total = d3.sum(data, d => d.value);
+    document.getElementById("total-count-p").textContent = (total / 1e6).toFixed(1) + "M";
+
+    // Ranking lateral
+    const rl = document.getElementById("ranking-list-p");
+    data.forEach((d, i) => {
+        const row = document.createElement("div");
+        row.className = "ranking-row";
+        row.innerHTML = `
+            <span class="rk-num">${i + 1}</span>
+            <span class="rk-name">${d.key}</span>
+            <span class="rk-val">${(d.value / 1e6).toFixed(2)}M</span>
+        `;
+        rl.appendChild(row);
+    });
+
+    // Gráfico barras horizontal
+    const width = 680, height = Math.max(300, data.length * 36);
+    const margin = { top: 10, right: 60, bottom: 20, left: 140 };
+    const vSvg = d3.select("#viz-permisos").append("svg").attr("viewBox", `0 0 ${width} ${height}`);
+
+    const x = d3.scaleLinear().domain([0, d3.max(data, d => d.value)]).range([margin.left, width - margin.right]);
+    const y = d3.scaleBand().domain(data.map(d => d.key)).range([margin.top, height - margin.bottom]).padding(0.15);
+
+    // Barras
+    vSvg.append("g").selectAll("rect")
+        .data(data).join("rect")
+        .attr("x", x(0)).attr("y", d => y(d.key))
+        .attr("width", 0).attr("height", y.bandwidth())
+        .attr("fill", "#e94560").attr("rx", 2)
+        .transition().duration(600).delay((d, i) => i * 40)
+        .attr("width", d => x(d.value) - x(0));
+
+    // Etiquetas valor
+    vSvg.append("g").selectAll("text.val")
+        .data(data).join("text")
+        .attr("class", "val")
+        .attr("x", d => x(d.value) + 6)
+        .attr("y", d => y(d.key) + y.bandwidth() / 2 + 4)
+        .attr("fill", "#e2e8f0").attr("font-size", "11px")
+        .attr("font-family", "DM Mono, monospace")
+        .text(d => (d.value / 1e6).toFixed(2) + "M");
+
+    // Eje Y
+    vSvg.append("g")
+        .attr("transform", `translate(${margin.left},0)`)
+        .call(d3.axisLeft(y).tickSize(0))
+        .call(g => g.select(".domain").remove())
+        .call(g => g.selectAll("text")
+            .attr("fill", "#e2e8f0").attr("font-size", "11px")
+            .attr("dx", "-6px"));
+}
+
+// ================================
+// TAB 3: DEMOGRAFÍA
+// ================================
+function renderDemo() {
+    if (demoRendered || !fullData) return;
+    demoRendered = true;
+
+    const dataObj = fullData.sexo || {};
+    const labelMap = { "M": "Mujeres", "V": "Varones", "H": "Hombres" };
+    const data = Object.entries(dataObj).map(([k, v]) => ({ key: labelMap[k] || k, value: v }));
+
+    const total = d3.sum(data, d => d.value);
+    document.getElementById("total-count-d").textContent = (total / 1e6).toFixed(1) + "M";
+
+    // Ranking lateral
+    const rl = document.getElementById("ranking-list-d");
+    data.sort((a, b) => b.value - a.value).forEach((d, i) => {
+        const pct = ((d.value / total) * 100).toFixed(1);
+        const row = document.createElement("div");
+        row.className = "ranking-row";
+        row.innerHTML = `
+            <span class="rk-num">${i + 1}</span>
+            <span class="rk-name">${d.key}</span>
+            <span class="rk-val">${(d.value / 1e6).toFixed(2)}M <span style="color:var(--muted)">(${pct}%)</span></span>
+        `;
+        rl.appendChild(row);
+    });
+
+    // Donut chart
+    const width = 420, height = 420, radius = Math.min(width, height) / 2 - 20;
+    const vSvg = d3.select("#viz-demo").append("svg")
+        .attr("viewBox", `0 0 ${width} ${height}`)
+        .append("g").attr("transform", `translate(${width / 2},${height / 2})`);
+
+    const color = d3.scaleOrdinal()
+        .domain(data.map(d => d.key))
+        .range(["#e94560", "#0f3460", "#ff8c42", "#4ade80"]);
+
+    const pie = d3.pie().value(d => d.value).sort(null);
+    const arc = d3.arc().innerRadius(radius * 0.55).outerRadius(radius);
+    const arcHover = d3.arc().innerRadius(radius * 0.55).outerRadius(radius + 10);
+
+    const arcs = vSvg.selectAll("path")
+        .data(pie(data)).join("path")
+        .attr("fill", d => color(d.data.key))
+        .attr("stroke", "#0a0a0f").attr("stroke-width", 2)
+        .on("mouseover", function() { d3.select(this).transition().duration(200).attr("d", arcHover); })
+        .on("mouseout", function() { d3.select(this).transition().duration(200).attr("d", arc); });
+
+    arcs.transition().duration(800)
+        .attrTween("d", function(d) {
+            const i = d3.interpolate({ startAngle: 0, endAngle: 0 }, d);
+            return t => arc(i(t));
+        });
+
+    // Etiquetas
+    vSvg.selectAll("text.slice-label")
+        .data(pie(data)).join("text")
+        .attr("class", "slice-label")
+        .attr("transform", d => `translate(${arc.centroid(d)})`)
+        .attr("text-anchor", "middle")
+        .attr("fill", "white")
+        .attr("font-size", "13px")
+        .attr("font-weight", "bold")
+        .text(d => ((d.data.value / total) * 100).toFixed(1) + "%");
+
+    // Centro
+    vSvg.append("text").attr("text-anchor", "middle").attr("dy", "-0.3em")
+        .attr("fill", "#e2e8f0").attr("font-family", "Bebas Neue, sans-serif").attr("font-size", "1.8rem")
+        .text((total / 1e6).toFixed(1) + "M");
+    vSvg.append("text").attr("text-anchor", "middle").attr("dy", "1.2em")
+        .attr("fill", "#5a5a7a").attr("font-size", "0.7rem").attr("font-family", "DM Mono, monospace")
+        .text("TOTAL");
+}
+</script>
+</body>
+</html>
