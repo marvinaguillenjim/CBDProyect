@@ -268,5 +268,3 @@ Catedrático Supervisor: Germán Moltó
 Asignatura: Estrategias y Herramientas de Computación Big Data en la Nube (CBD)
 
 
-### 💡 Consejo extra para tu GitHub:
-Cuando subas este código, si tienes capturas de pantalla de la arquitectura o del mapa interactivo final de la DGT (Dashboard), puedes guardarlas dentro de una carpeta llamada `img/` y enlazarlas en el cuerpo del README agregando: `![Dashboard interactivo D3.js](img/dashboard.png)`. Esto le dará una vistosidad visual increíble que destacará de forma inmediata en tu portfolio personal.
