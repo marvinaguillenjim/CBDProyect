@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crecimiento de Conductores en España</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://unpkg.com/topojson@3"></script>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: #12121a;
+    --border: #1e1e2e;
+    --accent: #ff3b5c;
+    --accent2: #ff8c42;
+    --text: #e8e8f0;
+    --muted: #5a5a7a;
+    --glow: rgba(255,59,92,0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0.4;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100vh;
+    padding: 24px;
+    gap: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+  }
+
+  .title-block h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(2rem, 5vw, 4rem);
+    letter-spacing: 0.05em;
+    line-height: 1;
+    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .title-block p {
+    color: var(--muted);
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .stats-row {
+    display: flex;
+    gap: 32px;
+    align-items: flex-end;
+  }
+
+  .stat {
+    text-align: right;
+  }
+
+  .stat-val {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.8rem;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 0.6rem;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  /* Main content */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  /* Map container */
+  .map-wrap {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .map-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 60px var(--glow);
+    pointer-events: none;
+  }
+
+  #map-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* Year display overlay */
+  .year-overlay {
+    position: absolute;
+    bottom: 20px;
+    left: 24px;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(4rem, 10vw, 8rem);
+    color: rgba(255,59,92,0.12);
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+    letter-spacing: -0.02em;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+  }
+
+  .panel-title {
+    font-size: 0.6rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+
+  /* Ranking */
+  .rank-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(30,30,46,0.5);
+    transition: all 0.4s ease;
+  }
+
+  .rank-num {
+    font-size: 0.6rem;
+    color: var(--muted);
+    width: 16px;
+    text-align: right;
+  }
+
+  .rank-bar-wrap {
+    flex: 1;
+  }
+
+  .rank-name {
+    font-size: 0.65rem;
+    color: var(--text);
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rank-bar {
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 2px;
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .rank-val {
+    font-size: 0.6rem;
+    color: var(--accent);
+    text-align: right;
+    min-width: 40px;
+  }
+
+  /* Legend */
+  #legend-svg {
+    width: 100%;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: rgba(10,10,15,0.95);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 10px 14px;
+    pointer-events: none;
+    font-size: 0.7rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 999;
+    backdrop-filter: blur(8px);
+  }
+
+  .tooltip strong {
+    display: block;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1rem;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: 2px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+
+  .btn:hover, .btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 12px var(--glow);
+  }
+
+  .timeline {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #year-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 2px;
+    background: var(--border);
+    outline: none;
+    border-radius: 2px;
+  }
+
+  #year-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 8px var(--glow);
+  }
+
+  .year-label {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.1rem;
+    color: var(--accent);
+    min-width: 40px;
+  }
+
+  /* Province paths */
+  .provincia {
+    stroke: #0a0a0f;
+    stroke-width: 0.5px;
+    cursor: pointer;
+    transition: stroke 0.2s, stroke-width 0.2s;
+  }
+
+  .provincia:hover {
+    stroke: var(--accent);
+    stroke-width: 1.5px;
+  }
+
+  .provincia.highlighted {
+    stroke: white;
+    stroke-width: 1px;
+  }
+
+  /* Speed control */
+  .speed-btns {
+    display: flex;
+    gap: 4px;
+  }
+
+  .speed-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.2s;
+  }
+
+  .speed-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+    margin-right: 6px;
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <header>
+    <div class="title-block">
+      <h1>Crecimiento de Conductores</h1>
+      <p><span class="live-dot"></span>España · DGT · Procesamiento Hadoop distribuido · 28.4M registros</p>
+    </div>
+    <div class="stats-row">
+      <div class="stat">
+        <div class="stat-val" id="hdr-total">—</div>
+        <div class="stat-label">Conductores acumulados</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val" id="hdr-year">—</div>
+        <div class="stat-label">Año seleccionado</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="map-wrap">
+      <svg id="map-svg" viewBox="0 0 900 560"></svg>
+      <div class="year-overlay" id="year-bg">2013</div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel">
+        <div class="panel-title">Top 10 Provincias</div>
+        <div id="ranking"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Escala de color</div>
+        <svg id="legend-svg" viewBox="0 0 240 40"></svg>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Provincia seleccionada</div>
+        <div id="selected-info" style="font-size:0.7rem; color:var(--muted);">Haz clic en una provincia</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn" id="play-btn">▶ PLAY</button>
+    <div class="speed-btns">
+      <button class="speed-btn active" data-speed="800">1×</button>
+      <button class="speed-btn" data-speed="400">2×</button>
+      <button class="speed-btn" data-speed="200">4×</button>
+    </div>
+    <div class="timeline">
+      <input type="range" id="year-slider" min="2013" max="2026" value="2013" step="1">
+      <span class="year-label" id="slider-year">2013</span>
+    </div>
+    <button class="btn" id="reset-btn">↺ RESET</button>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const GEOJSON_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/spain-provinces.geojson";
+const DATA_URL = "data/resultados_temporal.json";
+
+// Mapa de códigos numéricos DGT a nombres de provincias del GeoJSON
+const PROV_NAMES = {
+  "01":"Álava","02":"Albacete","03":"Alicante","04":"Almería","05":"Ávila",
+  "06":"Badajoz","07":"Islas Baleares","08":"Barcelona","09":"Burgos","10":"Cáceres",
+  "11":"Cádiz","12":"Castellón","13":"Ciudad Real","14":"Córdoba","15":"La Coruña",
+  "16":"Cuenca","17":"Gerona","18":"Granada","19":"Guadalajara","20":"Guipúzcoa",
+  "21":"Huelva","22":"Huesca","23":"Jaén","24":"León","25":"Lérida",
+  "26":"La Rioja","27":"Lugo","28":"Madrid","29":"Málaga","30":"Murcia",
+  "31":"Navarra","32":"Ourense","33":"Asturias","34":"Palencia","35":"Las Palmas",
+  "36":"Pontevedra","37":"Salamanca","38":"Santa Cruz de Tenerife","39":"Cantabria","40":"Segovia",
+  "41":"Sevilla","42":"Soria","43":"Tarragona","44":"Teruel","45":"Toledo",
+  "46":"Valencia","47":"Valladolid","48":"Vizcaya","49":"Zamora","50":"Zaragoza",
+  "51":"Ceuta","52":"Melilla"
+};
+
+const years = d3.range(2013, 2027);
+let currentYearIdx = 0;
+let playing = false;
+let timer = null;
+let speed = 800;
+let selectedProv = null;
+let dataByYear = {};
+let maxVal = 0;
+
+const svg = d3.select("#map-svg");
+const tooltip = d3.select("#tooltip");
+
+// Color scale
+const colorScale = d3.scaleSequential()
+  .interpolator(d3.interpolate("#12121a", "#ff3b5c"));
+
+// Load data
+Promise.all([
+  d3.json(GEOJSON_URL),
+  d3.json(DATA_URL)
+]).then(([geo, rawData]) => {
+
+  // Index data
+  rawData.forEach(d => {
+    if (!dataByYear[d.year]) dataByYear[d.year] = {};
+    dataByYear[d.year][d.provincia] = d.conductores;
+  });
+
+  // Max value across all years
+  maxVal = d3.max(rawData, d => d.conductores);
+  colorScale.domain([0, maxVal]);
+
+  // Draw legend
+  drawLegend();
+
+  // Projection
+  const projection = d3.geoConicConformal()
+    .center([-3.7, 40.2])
+    .scale(2800)
+    .translate([450, 280]);
+
+  const path = d3.geoPath().projection(projection);
+
+  // Draw map
+  svg.selectAll(".provincia")
+    .data(geo.features)
+    .join("path")
+    .attr("class", "provincia")
+    .attr("d", path)
+    .on("mousemove", (event, d) => {
+      const code = getCode(d);
+      const val = dataByYear[years[currentYearIdx]]?.[code] || 0;
+      tooltip
+        .style("opacity", 1)
+        .style("left", (event.clientX + 14) + "px")
+        .style("top", (event.clientY - 40) + "px")
+        .html(`<strong>${d.properties.name}</strong>${(val/1e6).toFixed(3)}M conductores`);
+    })
+    .on("mouseleave", () => tooltip.style("opacity", 0))
+    .on("click", (event, d) => {
+      const code = getCode(d);
+      selectedProv = selectedProv === code ? null : code;
+      svg.selectAll(".provincia").classed("highlighted", f => getCode(f) === selectedProv);
+      updateSelectedInfo(code);
+    });
+
+  // Initial render
+  updateYear(0);
+
+}).catch(err => {
+  console.error("Error:", err);
+  document.querySelector(".map-wrap").innerHTML = 
+    `<div style="padding:40px;color:#ff3b5c;font-family:monospace">
+      Error cargando datos.<br>Asegúrate de servir desde el servidor web:<br>
+      <code>http://44.211.238.163</code>
+    </div>`;
+});
+
+function getCode(d) {
+  // Intenta mapear por nombre
+  const name = d.properties.name;
+  return Object.entries(PROV_NAMES).find(([k,v]) => 
+    v.toLowerCase() === name?.toLowerCase() ||
+    name?.toLowerCase().includes(v.toLowerCase().split(" ")[0])
+  )?.[0] || null;
+}
+
+function updateYear(idx) {
+  currentYearIdx = idx;
+  const year = years[idx];
+  const yearData = dataByYear[year] || {};
+
+  // Update map colors
+  svg.selectAll(".provincia")
+    .transition().duration(300)
+    .attr("fill", d => {
+      const code = getCode(d);
+      const val = code ? (yearData[code] || 0) : 0;
+      return colorScale(val);
+    });
+
+  // Total
+  const total = d3.sum(Object.values(yearData));
+  d3.select("#hdr-total").text((total / 1e6).toFixed(2) + "M");
+  d3.select("#hdr-year").text(year === 2013 ? "< 2014" : year);
+  d3.select("#year-bg").text(year === 2013 ? "<2014" : year);
+  d3.select("#slider-year").text(year === 2013 ? "<2014" : year);
+  document.getElementById("year-slider").value = year;
+
+  // Ranking
+  updateRanking(yearData);
+
+  // Selected info
+  if (selectedProv) updateSelectedInfo(selectedProv);
+}
+
+function updateRanking(yearData) {
+  const sorted = Object.entries(yearData)
+    .map(([k, v]) => ({ code: k, name: PROV_NAMES[k] || k, val: v }))
+    .filter(d => d.name)
+    .sort((a, b) => b.val - a.val)
+    .slice(0, 10);
+
+  const maxRank = sorted[0]?.val || 1;
+  const container = d3.select("#ranking");
+
+  const items = container.selectAll(".rank-item")
+    .data(sorted, d => d.code);
+
+  const enter = items.enter()
+    .append("div").attr("class", "rank-item");
+
+  enter.append("div").attr("class", "rank-num");
+  const barWrap = enter.append("div").attr("class", "rank-bar-wrap");
+  barWrap.append("div").attr("class", "rank-name");
+  barWrap.append("div").attr("class", "rank-bar");
+  enter.append("div").attr("class", "rank-val");
+
+  const merged = enter.merge(items);
+  merged.select(".rank-num").text((d, i) => i + 1);
+  merged.select(".rank-name").text(d => d.name);
+  merged.select(".rank-bar").style("width", d => (d.val / maxRank * 100) + "%");
+  merged.select(".rank-val").text(d => (d.val / 1e6).toFixed(2) + "M");
+
+  items.exit().remove();
+}
+
+function updateSelectedInfo(code) {
+  if (!code) return;
+  const name = PROV_NAMES[code] || code;
+  const history = years.map(y => ({
+    year: y,
+    val: dataByYear[y]?.[code] || 0
+  }));
+  const current = history[currentYearIdx];
+  const prev = currentYearIdx > 0 ? history[currentYearIdx - 1].val : 0;
+  const delta = current.val - prev;
+
+  d3.select("#selected-info").html(`
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:1.1rem;color:var(--accent);margin-bottom:6px">${name}</div>
+    <div style="margin-bottom:4px">Total: <span style="color:var(--text)">${current.val.toLocaleString('es-ES')}</span></div>
+    <div style="margin-bottom:4px">Año ${years[currentYearIdx] === 2013 ? '<2014' : years[currentYearIdx]}: 
+      <span style="color:${delta >= 0 ? '#4ade80' : '#ff3b5c'}">
+        ${delta >= 0 ? '+' : ''}${delta.toLocaleString('es-ES')}
+      </span>
+    </div>
+    <div style="margin-top:8px;font-size:0.55rem;color:var(--muted)">HISTÓRICO</div>
+    <div style="margin-top:4px;display:flex;gap:2px;align-items:flex-end;height:30px">
+      ${history.map(h => {
+        const pct = maxVal > 0 ? (h.val / maxVal * 100) : 0;
+        const isCurrentYear = h.year === years[currentYearIdx];
+        return `<div style="flex:1;height:${Math.max(2, pct * 0.3)}px;background:${isCurrentYear ? 'var(--accent)' : 'var(--border)'};border-radius:1px;"></div>`;
+      }).join('')}
+    </div>
+  `);
+}
+
+function drawLegend() {
+  const lgSvg = d3.select("#legend-svg");
+  const defs = lgSvg.append("defs");
+  const grad = defs.append("linearGradient").attr("id", "leg-grad");
+  grad.append("stop").attr("offset", "0%").attr("stop-color", "#12121a");
+  grad.append("stop").attr("offset", "100%").attr("stop-color", "#ff3b5c");
+
+  lgSvg.append("rect")
+    .attr("x", 0).attr("y", 8)
+    .attr("width", 240).attr("height", 12)
+    .attr("rx", 2)
+    .attr("fill", "url(#leg-grad)");
+
+  lgSvg.append("text").attr("x", 0).attr("y", 36)
+    .attr("fill", "#5a5a7a").attr("font-size", "9px")
+    .attr("font-family", "DM Mono").text("0");
+
+  lgSvg.append("text").attr("x", 240).attr("y", 36)
+    .attr("fill", "#5a5a7a").attr("font-size", "9px")
+    .attr("font-family", "DM Mono").attr("text-anchor", "end")
+    .text((maxVal / 1e6).toFixed(1) + "M");
+}
+
+// Controls
+document.getElementById("play-btn").addEventListener("click", () => {
+  playing = !playing;
+  document.getElementById("play-btn").textContent = playing ? "⏸ PAUSE" : "▶ PLAY";
+  if (playing) {
+    if (currentYearIdx >= years.length - 1) currentYearIdx = 0;
+    tick();
+  } else {
+    clearTimeout(timer);
+  }
+});
+
+document.getElementById("reset-btn").addEventListener("click", () => {
+  playing = false;
+  clearTimeout(timer);
+  document.getElementById("play-btn").textContent = "▶ PLAY";
+  updateYear(0);
+});
+
+document.getElementById("year-slider").addEventListener("input", function() {
+  const year = parseInt(this.value);
+  const idx = years.indexOf(year);
+  if (idx >= 0) {
+    clearTimeout(timer);
+    playing = false;
+    document.getElementById("play-btn").textContent = "▶ PLAY";
+    updateYear(idx);
+  }
+});
+
+document.querySelectorAll(".speed-btn").forEach(btn => {
+  btn.addEventListener("click", function() {
+    document.querySelectorAll(".speed-btn").forEach(b => b.classList.remove("active"));
+    this.classList.add("active");
+    speed = parseInt(this.dataset.speed);
+  });
+});
+
+function tick() {
+  if (!playing) return;
+  if (currentYearIdx < years.length - 1) {
+    updateYear(currentYearIdx + 1);
+    timer = setTimeout(tick, speed);
+  } else {
+    playing = false;
+    document.getElementById("play-btn").textContent = "▶ PLAY";
+  }
+}
+</script>
+</body>
+</html>
